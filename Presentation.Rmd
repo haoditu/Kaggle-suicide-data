@@ -1,0 +1,133 @@
+---
+title: "Research Question: \nHow Can We Prevent Suicides?"  
+author: "Haodi Tu"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: slidy_presentation
+
+---
+
+
+Suicides Data Exploratory
+=========================================
+
+### Data Summary
+
+```{r echo=FALSE, include=FALSE,warning=FALSE}
+
+#SETUP
+library(tidyverse)
+library(countrycode)
+library(rworldmap)
+
+# Load data 
+master <- read.csv("master.csv")
+
+#rename columns
+names(master) <- c('country','year','sex','age','suicides_no','population','suicide_rate',
+                   'country_year', 'HDI_for_year','gdp_for_year','gdp_per_capita', 'generation')
+# Convert column year data type to factor
+#master['year'] = as.factor(master$year)
+# Convert column gdp_for_year to numeric data type
+master$gdp_for_year <- gsub(",","", master$gdp_for_year)  
+master$gdp_for_year <-  as.numeric(master$gdp_for_year)
+
+# Delete years in age values
+master$age <- gsub(" years", "", master$age)
+master$age <- factor(master$age,
+                     ordered = T,
+                     levels = c("5-14", "15-24","25-34", "35-54", "55-74", "75+"))
+
+# data selection 
+# remove all missing data from HDI_for_year
+# sum(is.na(master$HDI_for_year)) # NA values = 19456 > 2/3 of total observations, so not applicable
+
+# remove this column
+master <- subset(master, select = -c(HDI_for_year, suicide_rate))
+
+master$suicide_rate <- (master$suicides_no/master$population) *100
+
+# keep data that has 12 rows (2 sex * 6 age group) for each country_year
+# master %>% 
+#   group_by(country_year) %>% 
+#   count() %>% 
+#   filter(n != 12) # Observations from year 2016 have only 10 rows, so fliter out 2016
+
+master <- master %>% 
+  filter(year != 2016) %>% 
+  select(-country_year)
+
+# Eliminate coutries with less than 3 years of data
+missing_data_year <-master %>% 
+  group_by(country) %>% 
+  summarize(rows = n(),
+            years = rows/ 12) %>% 
+  arrange(years)
+
+master <- master %>% 
+  filter(!(country %in% head(missing_data_year$country,7)))
+
+# Adding continent
+master$continent <- countrycode(sourcevar = master[, "country"],
+                                origin = "country.name",
+                                destination = "continent")  
+master$continent <- as.factor(master$continent)
+
+master <- master %>%  
+  mutate_if(is.integer, as.numeric)
+
+```
+
+```{r echo=FALSE}
+summary(master)
+
+```
+
+![](map.png){width=400px}
+
+Richer countries have a higher suicide rate 
+=========================================
+
++ Countries in Europe and Africa vs countries in Americas, Asia and Oceania
++ Overall a positive slope 
++ The wealth disparities?
+
+
+![](slope.png){width=800px}
+
+
+Suicide number has decreased since 1995 
+=========================================
+
++ 1995 has **the highest** suicides and decreases since then 
++ What could be the reason?
+
+![](trend.png){width=800px}
+
+
+
+Medium age males have higher suicide rate  
+=========================================
+
++ A higher total suicide number for men than women
++ Age 35 - 54 has the most suicides 
++ Family support? 
+
+![](age.png){width=800px}
+
+
+
+
+
+To conclude...
+=========================================
+
+#### To prevent suicide
+
++ Reduce the wealth disparities
++ **Be happy and think positively**
+
+#### For further investigation
+
++ The high risks (top 5) of suicides demographically in history
+
+![](positive.png){width=800px}
