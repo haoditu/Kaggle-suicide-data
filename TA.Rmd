@@ -1,0 +1,853 @@
+---
+title: "Final Project"
+author: "Haodi Tu"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  word_document:
+    toc: yes
+    toc_depth: '3'
+
+---
+
+# Research Question 
+
+How can we prevent suicides?
+
+# Clear environment
+
+```{r}
+# Clear environment of variables and functions
+rm(list = ls(all = TRUE)) 
+
+# Clear environmet of packages
+if(is.null(sessionInfo()$otherPkgs) == FALSE)lapply(paste("package:", names(sessionInfo()$otherPkgs), sep=""), detach, character.only = TRUE, unload = TRUE)
+```
+
+# Load Packages
+
+```{r echo = FALSE}
+library(tidyverse)
+library(stringr)
+library(kableExtra)
+library(GGally)
+library(psych)
+library(gridExtra)
+library(janitor)
+library(MultinomialCI)
+library(htmlTable)
+library(countrycode)
+library(rworldmap)
+library(sjPlot)
+library(directlabels)
+```
+
+# Load data
+```{r}
+# Load data 
+master <- read.csv("master.csv")
+
+
+# Examine data structure
+str(master)
+```
+
+# Things need to be done before EDA
+
++ Remane column names 
++ Change data type for some variables, like year
++ Data selection: 
+    - recalculate suicide rate and replace column suicides.100k.pop
+    - remove all missing data from HDI.for.year
+    - Keep data that has 12 rows (2 sex * 6 age group) for every country.year
+    - Eliminate coutries with less than 3 years of data
+    - Adding continent for convenient purpose
+
+
+```{r}
+#rename columns
+names(master) <- c('country','year','sex','age','suicides_no','population','suicide_rate',
+                   'country_year', 'HDI_for_year','gdp_for_year','gdp_per_capita', 'generation')
+# Convert column year data type to factor
+#master['year'] = as.factor(master$year)
+# Convert column gdp_for_year to numeric data type
+master$gdp_for_year <- gsub(",","", master$gdp_for_year)  
+master$gdp_for_year <-  as.numeric(master$gdp_for_year)
+
+# Delete years in age values
+master$age <- gsub(" years", "", master$age)
+master$age <- factor(master$age,
+                     ordered = T,
+                     levels = c("5-14", "15-24","25-34", "35-54", "55-74", "75+"))
+
+```
+
+```{r}
+# data selection 
+# remove all missing data from HDI_for_year
+sum(is.na(master$HDI_for_year)) # NA values = 19456 > 2/3 of total observations, so not applicable
+
+# remove this column
+master <- subset(master, select = -c(HDI_for_year, suicide_rate))
+
+master$suicide_rate <- (master$suicides_no/master$population) *100
+
+# keep data that has 12 rows (2 sex * 6 age group) for each country_year
+master %>% 
+  group_by(country_year) %>% 
+  count() %>% 
+  filter(n != 12) # Observations from year 2016 have only 10 rows, so fliter out 2016
+
+master <- master %>% 
+  filter(year != 2016) %>% 
+  select(-country_year)
+
+# Eliminate coutries with less than 3 years of data
+missing_data_year <-master %>% 
+  group_by(country) %>% 
+  summarize(rows = n(),
+            years = rows/ 12) %>% 
+  arrange(years)
+
+master <- master %>% 
+  filter(!(country %in% head(missing_data_year$country,7)))
+
+```
+
+```{r}
+# Adding continent
+master$continent <- countrycode(sourcevar = master[, "country"],
+                                origin = "country.name",
+                                destination = "continent")  
+master$continent <- as.factor(master$continent)
+
+```
+
+```{r}
+master <- master %>%  
+  mutate_if(is.integer, as.numeric)
+
+str(master)
+
+summary(master)
+
+# Save csv file for power bi 
+write.csv(master, "master_bi.csv")
+
+```
+
+Observations
+
++ Six factor variables, three integer variables and two numeric variables
++ Sample is drawed from 101 countries from 1985 to 2015, observations are equalily stored by gender
++ Number of observations from each age group are equaliy distributed, except for the youngest group (5-14 years) 
++ Suicide number has large range from 0 to 22338, left skewed 
++ Population has a large range vary by countries, left skewed
++ Suicide_ppl_100k is calculated from suicides number divided by population in 100,000 unit, left skewed
++ Removed Human Development Index because it has lots of NA's
++ Distributions of gdp_for_year and gdp_per_capita has similar distributions 
++ Five genderations, where Silent and Generation X has the highest observations
++ Five continents, Europe has the most observations and Africa has the least
+
+    
+Questions to be answered 
+
++ To find out possible suicide reasons
+    
+    + Suicide number across world
+    + Relationship between suicide rate and variables (e.g. age, gdp per capita, gender)
+
+    
+
+
+# Univariable non-graphical - Categorical
+
+Categorical data - tabulation
+
+## Country 
+
+```{r}
+# Country table 
+country_all <- master %>% 
+  group_by(country) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            avg_suicides_ppl = mean(suicide_rate),
+            avg_gdp_year_100k= mean(gdp_for_year/100000),
+            avg_gdp_ppl = mean(gdp_per_capita))
+country_all
+```
+
+Observation
+
++ surprisingly, Dominica has 0 suicide record
++ Table is hard to see pattern with large country rows
+
+## Year
+
+```{r}
+# Year table
+year_all <- master %>% 
+  group_by(year) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            tot_ppl = sum(population),
+            avg_suicides_ppl = mean(suicide_rate),
+            avg_gdp_year_100k= mean(gdp_for_year/100000),
+            avg_gdp_ppl = mean(gdp_per_capita))
+            
+year_all
+```
+
+Observation
+
++ Looks like suicide number has a bell shape, increase from 1985 and decease after 2000 year
+
+## Sex
+
+```{r}
+# Sex table 
+sex_all <- master %>% 
+  group_by(sex) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            avg_suicides_ppl = mean(suicide_rate))
+            
+sex_all
+
+```
+
+Observation
+
++ Suicides number of male is 4 times as suicides number of female
+
+## Age
+
+```{r}
+# Age table
+age_all <- master %>% 
+  group_by(age) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            avg_suicides_ppl = mean(suicide_rate))
+            
+age_all
+
+
+```
+
+Observation
+
++ Age group 35-54 years has the most suicide number
++ Age group 5-14 years has the lest suicide number
++ However, age group 55-74 years has the highest suidcide rate  
+
+
+## Generation
+
+```{r}
+# Year table
+generation_all <- master %>% 
+  group_by(generation) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            avg_suicides_ppl = mean(suicide_rate),
+            avg_gdp_year_100k= mean(gdp_for_year/100000),
+            avg_gdp_ppl = mean(gdp_per_capita))
+            
+generation_all
+```
+
+Observation
+
++ Boomers have the highest suicide number and Generation Z has the least
++ G.I Generation has the highest suicide rate
+
+## Continent 
+
+```{r}
+# Continents table 
+continent_all <- master %>% 
+  group_by(continent) %>% 
+  summarise(count = n(),
+            tot_suicides = sum(suicides_no),
+            avg_suicides_ppl = mean(suicide_rate),
+            avg_gdp_year_100k= mean(gdp_for_year/100000),
+            avg_gdp_ppl = mean(gdp_per_capita))
+continent_all
+```
+
+Observation
+
++ Europe has the most suicide number and average suicide rate
++ Africa has the least
+
+# Univariate graphical - Categorical 
+
+## Country
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by country
+
+country_all %>% 
+  ggplot(aes(x = country, y = tot_suicides)) +
+    geom_bar(stat = "identity") +
+  coord_flip()
+
+```
+
+
+Observations
+
++ still hard to see pattern
++ certain countries have very large suicide number
++ will conduct a global map or continent heat map with cuiside number to see patterns
+
+## Year
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by year
+grid.arrange(
+  year_all %>% 
+    ggplot(aes(x = year, y = count)) +  
+      geom_bar(stat = "identity"),
+  year_all %>% 
+    ggplot(aes(x = year, y = tot_suicides)) +
+      geom_bar(stat = "identity"),
+  year_all %>% 
+    ggplot(aes(x = year, y = tot_ppl/1000000)) +
+      geom_bar(stat = "identity"),
+  year_all %>% 
+    ggplot(aes(x = year, y = avg_suicides_ppl)) +
+      geom_bar(stat = "identity"),
+  year_all %>% 
+    ggplot(aes(x = year, y = avg_gdp_year_100k)) +
+      geom_bar(stat = "identity"),
+  year_all %>% 
+    ggplot(aes(x = year, y = avg_gdp_ppl)) +
+      geom_bar(stat = "identity"),
+  ncol = 2
+)
+```
+
+Observations 
+
++ Average gdp grows over year, which is practical to real world
++ Total suicide number grow over the first 15 years, and slicely descrese after then 
+
+## Sex
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by Sex
+grid.arrange(
+  sex_all %>% 
+    ggplot(aes(x = sex, y = count)) +  
+      geom_bar(stat = "identity"),
+  sex_all %>% 
+    ggplot(aes(x = sex, y = tot_suicides)) +
+      geom_bar(stat = "identity"),
+  sex_all %>% 
+    ggplot(aes(x = sex, y = avg_suicides_ppl)) +
+      geom_bar(stat = "identity"),
+
+  ncol = 2
+)
+```
+
+Observations 
+
++ Male suicide number and rate is 5 times higher than female
+
+## Age
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by age
+grid.arrange(
+  age_all %>% 
+    ggplot(aes(x = age, y = count)) +  
+      geom_bar(stat = "identity"),
+  age_all %>% 
+    ggplot(aes(x = age, y = tot_suicides)) +
+      geom_bar(stat = "identity"),
+  age_all %>% 
+    ggplot(aes(x = age, y = avg_suicides_ppl)) +
+      geom_bar(stat = "identity"),
+  ncol = 2
+)
+```
+
+Observations 
+
++ Observations from all age group are same
++ The youngest age (5-14 years) group has the least suicide number and suicide rate
++ The oldest age (75+ years) group has the least suicide number but the highest suicide rate
+
+## Generation
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by generation
+grid.arrange(
+  generation_all %>% 
+    ggplot(aes(x = generation, y = count)) +  
+      geom_bar(stat = "identity") + coord_flip(),
+  generation_all %>% 
+    ggplot(aes(x = generation, y = tot_suicides)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  generation_all %>% 
+    ggplot(aes(x = generation, y = avg_suicides_ppl)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  generation_all %>% 
+    ggplot(aes(x = generation, y = avg_gdp_year_100k)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  generation_all %>% 
+    ggplot(aes(x = generation, y = avg_gdp_ppl)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  ncol = 2
+)
+```
+
+Observations 
+
++ small suicide number and rate on Generation z, maybe because of the growth of gdp
++ Boomers has large suicide number
++ G.I. generation has the highest average suicide rate under the lowest gdp
+
+## Continent
+
+```{r}
+# Code histograms using grid.arrange so can see all quant variables together group by continent
+grid.arrange(
+  continent_all %>% 
+    ggplot(aes(x = continent, y = count)) +  
+      geom_bar(stat = "identity") + coord_flip(),
+  continent_all %>% 
+    ggplot(aes(x = continent, y = tot_suicides)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  continent_all %>% 
+    ggplot(aes(x = continent, y = avg_suicides_ppl)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  continent_all %>% 
+    ggplot(aes(x = continent, y = avg_gdp_year_100k)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  continent_all %>% 
+    ggplot(aes(x = continent, y = avg_gdp_ppl)) +
+      geom_bar(stat = "identity")+ coord_flip(),
+  ncol = 2
+)
+```
+
+Observations
+
++ Americas has the highest national gdp
++ Europe has the largest suicide body as well as suicide rate
++ Europe has the highest GDP per capita
+
+
+# Univariate Non-graphical - Quantitative
+```{r}
+master %>% 
+  select(-c(country, year, sex, age, generation)) %>% 
+  summary()
+```
+
+Observation
+
++ Suicides_no - a large range, right skewed distribution, exist extreme numbers
++ Population - right skewed distribution 
++ suicide_rate - a large range, right skewed distribution 
++ gdp_for_year - a large range, right skewed distribution
++ gdp_per_capita - a large range, right skewed distribution
+
+
+
+# Univariate Graphical - Quantitative 
+```{r}
+master %>% 
+  ggplot(aes(suicides_no)) +
+    geom_histogram(binwidth = 500)
+```
+
+
+```{r}
+master %>% 
+  ggplot(aes(population)) +
+    geom_histogram(binwidth = 1000000)
+```
+
+
+```{r}
+master %>% 
+  ggplot(aes(suicide_rate)) +
+    geom_histogram(binwidth = .001)
+```
+
+
+```{r}
+master %>% 
+  ggplot(aes(gdp_for_year)) +
+    geom_histogram(binwidth = 100000000000)
+```
+
+```{r}
+master %>% 
+  ggplot(aes(gdp_per_capita)) +
+    geom_histogram(binwidth = 100)
+```
+
+
+## Boxplots of quantitative data
+```{r}
+# Set grid pattern for graph arrangement
+par(mfrow = c(2, 3))
+boxplot(master$suicides_no, main = "suicide number")
+boxplot(master$population, main = "population")
+boxplot(master$suicide_rate, main = "suicide rate in 100k")
+boxplot(master$gdp_for_year, main = "National Yearly GDP")
+boxplot(master$gdp_per_capita, main = "Average GDP Per captia")
+```
+
+Observation 
+
++ Many outliers across quantitative variables, because situation differs by countries 
+
+# Multivariate non-graphical -- Categorical
+
+## Proportion Cross tabs
+
+
+```{r}
+addmargins(round(prop.table(xtabs(~ continent + year, data = master)), 4))
+
+```
+
+
+```{r}
+addmargins(round(prop.table(xtabs(~ continent + sex, data = master)), 3))
+
+```
+
+
+```{r}
+addmargins(round(prop.table(xtabs(~ continent + age, data = master)), 3))
+
+```
+
+
+```{r}
+addmargins(round(prop.table(xtabs(~ age + sex, data = master)), 4))
+
+```
+
+
+# Multivariate graphical -- Categorical
+
+```{r}
+master %>%
+  group_by(continent, year) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(continent, year)) + 
+  geom_tile(aes(fill = -count))
+
+```
+
+
+```{r}
+master %>%
+  group_by(year, sex) %>% 
+  summarise(count = n()) %>% 
+  ggplot(aes(year, sex)) + 
+  geom_tile(aes(fill = -count))
+
+```
+
+
+# Multivariate non-graphical -- Quantitative
+
+
+```{r}
+# Select all numeric variables
+sub_master <- select(master, "year","suicides_no", "population", "suicide_rate", "gdp_for_year", "gdp_per_capita")
+
+cor(sub_master)
+```
+
+
+
+# Multivariate graphical code -- Quantitative 
+
+```{r}
+sub_master %>% 
+  pairs.panels()
+```
+
+Observation
+
++ high correlated variables are suicides_no and population, population and gdp_for_year
++ Surprisingly, population and suicide_rate do not have high correlation, neither do suicide_rate and gdp_per_capita
++ GDP per captia increases as time goes by
+
+
+```{r}
+# Standard scatter plot
+
+master %>% 
+  ggplot(aes(x = population, y = suicide_rate, color = continent)) +
+  geom_point() +
+  geom_jitter() +
+  geom_smooth(method = "lm", se = FALSE)
+
+
+```
+
+
+Observation 
+
++ European countries have high suicide rates, regardless the population
++ Suicide rate grows slightly as population increase in Americas 
++ Africa has one dot at over 20% suicide rate
++ Asia has lower suicide rate than Europe in general
+
+```{r}
+p3 <- master %>% 
+  group_by(continent) %>% 
+  ggplot(aes(x = gdp_per_capita/1000, y = suicides_no, col = continent))+ 
+  geom_smooth(method = "lm", se= FALSE)  + 
+  geom_smooth(method = "lm",  aes(group = 1, colour = "Overall Slope"),se= FALSE) +
+  ggtitle( "Relationship Between GDP Per Capita (in $1k) and Suicides",
+       subtitle = "Overall positive slope, richer continents have more suicides") +
+  xlab("GDP per capita in $1k") +
+  ylab("Average Suicides") +
+  theme_classic()
+
+p3
+ggsave('slope.png', p3)
+```
+
+Do richer countries have lower suicide rate?
+
++ Suiside rates goes down as GDP per capita increase, especially European and Africa countries
++ Continents, like Americas and Oceania, have a positive relationship between suicide rate and GDP 
++ Overall, a light positive relationship, indicating richer coutries have a higher suicide rate
+
+
+# Multivariate non-graphical -- Categorical and Quantitative
+
+
+```{r}
+tot_suicide_no_continent_sex <- master %>%
+  group_by(continent, sex) %>%
+  summarise(tot_suicide_no = sum(suicides_no)) %>%
+  spread(continent, tot_suicide_no) %>%
+  as.data.frame()
+
+tot_suicide_no_continent_sex
+```
+
+
+
+```{r}
+tot_suicide_no_continent_age <- master %>%
+  group_by(continent, age) %>%
+  summarise(tot_suicide_no = sum(suicides_no)) %>%
+  spread(continent, tot_suicide_no) %>%
+  as.data.frame()
+
+tot_suicide_no_continent_age
+```
+
+
+
+
+# Multivariate graphical -- Categorical and Quantitative
+
+
+```{r}
+master %>% 
+  ggplot(aes(x = generation , y = suicides_no , fill = generation))+
+  geom_boxplot(alpha = .50)+
+  coord_cartesian(ylim = c(0,500)) +
+  theme_bw()
+
+```
+
+## Distribution of suicide rates across age groups
+```{r}
+master %>% 
+ggplot(aes(x = suicide_rate, fill = age, alpha = 0.5)) + 
+geom_histogram(binwidth = 0.01) + 
+facet_wrap(~age) +
+guides(alpha = FALSE) +
+labs(title = "Distribution of suicide rates across age groups", subtitle = "Lots of countries having low suicide rates for the youngest age group", x = "Suicide rates (in %)")
+
+```
+
+## Distribution of suicide rates across generation groups
+```{r}
+
+master %>% 
+ggplot(aes(x = suicide_rate, fill = generation, alpha = 0.5)) + 
+geom_histogram(position = "dodge", binwidth = 0.05) + 
+facet_wrap(~generation) +
+guides(alpha = FALSE) +
+labs(title = "Suicide rates across generations", subtitle = "Countries have high suicide rate for slice", x = "Suicide rate (in %)")
+
+```
+
+## Trend of suicide rate over time 
+```{r}
+global_avg_suicide_no <- (sum(as.numeric(master$suicides_no)) / sum(as.numeric(master$population))) * 100000
+p0 <- master %>%
+  group_by(year) %>%
+  summarize(population = sum(population), 
+            suicides = sum(suicides_no), 
+            suicides_per_100k = (suicides / population) * 100000) %>%
+  ggplot(aes(x = year, y = suicides_per_100k)) + 
+  geom_line(col = "#9932CC", size = 1) + 
+  geom_point(col = "#9932CC", size = 2) + 
+  geom_hline(yintercept = global_avg_suicide_no, linetype = 2, color = "#D8BFD8", size = 1) + 
+  geom_text(aes(x = 2011, y=global_avg_suicide_no, label = "Global Avg Suicides Line", vjust = -1)) +
+  labs(title = "Trend of Global Suicides per 100k Over time, 1985 - 2015",
+       subtitle = "Suicides number has decreased significantly since 1995",
+       x = "Year", 
+       y = "Suicides per 100k") + 
+  scale_x_continuous(breaks = seq(1985, 2015, 5)) +
+   theme(axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        panel.background = element_blank()) 
+p0
+ggsave('trend.png', p0)
+```
+
+```{r warnning= FALSE}
+p1 <- master %>%
+  group_by(age, sex) %>%
+  summarize(suicides = sum(suicides_no)) %>%
+  ggplot(aes(x = age, y = suicides, fill = reorder(sex, suicides))) + 
+  geom_bar(stat = "identity") +  
+  labs(title = "Total Suicides From Each Age Group By Gender",
+       subtitle = "Men at age between 35-54 may under the most pressure") +
+  scale_fill_manual(values = c('grey', '#FF99FF'),
+                    name = '',
+                    labels = c('Female', "Male"))+
+  scale_x_discrete(limit = c("5-14", "15-24", "35-54","55-74","75+")) +
+  scale_y_continuous(labels = scales::comma)+
+   theme(axis.ticks.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.y = element_blank(),
+        panel.background = element_blank(),
+        legend.direction = "horizontal",
+        legend.position = "top") 
+
+p1
+ggsave('age.png', p1)
+```
+
+## World map with suicide rate
+
+```{r}
+# grey area indicates missing data
+pdf("map.pdf",width=6,height=4,paper='special') 
+
+country <- master %>%
+  group_by(country) %>%
+  summarize(country_suicide_no = (sum(as.numeric(suicides_no)) / sum(as.numeric(population))) * 100000)
+
+countrydata <- joinCountryData2Map(country, joinCode = "NAME", nameJoinColumn = "country")
+
+par(mar=c(0, 0, 0, 0))
+
+mapCountryData(countrydata, 
+               nameColumnToPlot="country_suicide_no", 
+               mapTitle="", 
+               colourPalette = "heat", 
+               oceanCol="lightblue", 
+               missingCountryCol="grey65", 
+               catMethod = "pretty")
+
+dev.off()
+```
+
+
+
+# EDA Summary
+
++ European countries have significantly higher suicide rates
++ Suicide rate reaches to peach from 1991 to 2003, where 1995 has the highest 
+
+
+
+# Statistical analysis
+
+Since the data has the same count from each categorical vairable, there is no need to conduct statistical test (like chi-square test) on these categorical variables. So I am going to conduct the regression model directly. 
+
+## Multiple linear regression
+
+Null hypothesis: suicides number has no relationships with sex, age, GDP per capita and continent
+
+```{r}
+# remove units and brand
+ma <- master[, -c(1,7,9,10)]
+
+mod <-  lm(suicides_no ~ sex + age  + gdp_per_capita + continent, data = ma)
+
+#summary(mod)
+
+# Pull out the coefficients and confidence interval for table and graph
+coe <- summary(mod)$coefficients # get coefficients and related stats
+coe_CI <- as.data.frame(cbind(coe[-1, ], confint(mod)[-1, ])) # find and bind CI, remove Intercept
+
+# Rename results data frame
+names(coe_CI) <- c("estimate", "se", "t", "pval","low_CI","high_CI")
+
+htmlTable(round(coe_CI[order(coe_CI$pval, decreasing = FALSE), ],3))
+
+```
+
+## Model diagnosis
+
+```{r}
+par(mfrow = c(2,3))
+plot(ma$year,mod$residuals)
+plot(ma$sex,mod$residuals)
+plot(ma$age,mod$residuals)
+plot(ma$population,mod$residuals)
+plot(ma$gdp_per_capita,mod$residuals)
+plot(ma$continent,mod$residuals)
+
+```
+
+
+```{r}
+model_diag <- plot_model(mod, type ="diag")
+model_diag[1]
+
+```
+
+```{r}
+model_diag[3]
+```
+
+```{r}
+model_diag[4]
+```
+
+## Statistical analysis Summary
+
++ Sex, age, continent are statistically and practically significant
+    - Except for independ variables, like continent$Oceania and age (55-74 group)
++ suicide number is expected to increase 0.02 for every dollar increase in GDP per capita, holding others constant.
+
+# Save Image of file
+```{r}
+# # Save the rds file to reuse anything from this file in another file
+# save.image("suicide.RData")
+# 
+# # recover using load()
+# # load("office_TA.RData")
+```
+
